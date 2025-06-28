@@ -250,8 +250,7 @@ dependencies = [
 [[package]]
 name = "ext4_rs"
 version = "1.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a1a97344bde15b0ace15e265dab27228d4bdc37a0bfa8548c5645d7cfa6a144"
+source = "git+https://github.com/SMS-Derfflinger/ext4_rs.git?branch=debug#8f6bb48bf14b402b7b28db66fd9505a652a789f3"
 dependencies = [
  "bitflags",
  "log",

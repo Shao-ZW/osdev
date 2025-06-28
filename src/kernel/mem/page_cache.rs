@@ -54,6 +54,51 @@ impl Buffer for CachePage {
     }
 }
 
+pub struct CachePageStream {
+    page: CachePage,
+    cur: usize,
+}
+
+impl CachePageStream {
+    pub fn new(page: CachePage) -> Self {
+        Self { page, cur: 0 }
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.page.valid_size().saturating_sub(self.cur)
+    }
+
+    pub fn is_drained(&self) -> bool {
+        self.cur >= self.page.valid_size()
+    }
+}
+
+impl Stream for CachePageStream {
+    fn poll_data<'a>(&mut self, buf: &'a mut [u8]) -> KResult<Option<&'a mut [u8]>> {
+        if self.cur >= self.page.valid_size() {
+            return Ok(None);
+        }
+
+        let page_data = &self.page.all()[self.cur..self.page.valid_size()];
+        let to_read = buf.len().min(page_data.len());
+
+        buf[..to_read].copy_from_slice(&page_data[..to_read]);
+        self.cur += to_read;
+
+        Ok(Some(&mut buf[..to_read]))
+    }
+
+    fn ignore(&mut self, len: usize) -> KResult<Option<usize>> {
+        if self.cur >= self.page.valid_size() {
+            return Ok(None);
+        }
+
+        let to_ignore = len.min(self.page.valid_size() - self.cur);
+        self.cur += to_ignore;
+        Ok(Some(to_ignore))
+    }
+}
+
 impl CachePage {
     pub fn new() -> Self {
         let page = GlobalPageAlloc.alloc().unwrap();
@@ -216,13 +261,13 @@ impl PageCache {
     }
 
     pub async fn fsync(&self) -> KResult<()> {
-        let pages = self.pages.lock().await;
-        for (page_id, page) in pages.iter() {
+        let mut pages = self.pages.lock().await;
+        for (page_id, page) in pages.iter_mut() {
             if page.is_dirty() {
                 self.backend
                     .upgrade()
                     .unwrap()
-                    .write_page(page, page_id << PAGE_SIZE_BITS)?;
+                    .write_page(&mut CachePageStream::new(*page), page_id << PAGE_SIZE_BITS)?;
                 page.clear_dirty();
             }
         }
@@ -302,7 +347,7 @@ impl PageCache {
 pub trait PageCacheBackend {
     fn read_page(&self, page: &mut CachePage, offset: usize) -> KResult<usize>;
 
-    fn write_page(&self, page: &CachePage, offset: usize) -> KResult<usize>;
+    fn write_page(&self, page: &mut CachePageStream, offset: usize) -> KResult<usize>;
 }
 
 pub trait PageCacheRawPage: RawPage {
