@@ -152,22 +152,22 @@ tmux-debug:
 	tmux kill-session -t gbos-debug
 
 $(BINARY_DIR)/eonix_kernel: $(KERNEL_DEPS)
-	cargo build $(CARGO_FLAGS)
+	CARGO_TARGET_DIR=build cargo build $(CARGO_FLAGS)
 
 build/kernel.sym: $(BINARY_DIR)/eonix_kernel
-	cargo objcopy -q $(CARGO_FLAGS) -- --only-keep-debug build/kernel.sym
+	CARGO_TARGET_DIR=build cargo objcopy -q $(CARGO_FLAGS) -- --only-keep-debug build/kernel.sym
 
 build/fs-%.img: user-programs/init_script_%.sh script/build-img.sh $(USER_PROGRAMS)
 	ARCH=$* OUTPUT=$@ sh script/build-img.sh
 
 build/mbr.bin: $(BINARY_DIR)/eonix_kernel
-	cargo objcopy -q $(CARGO_FLAGS) -- -O binary -j .mbr build/mbr.bin
+	CARGO_TARGET_DIR=build cargo objcopy -q $(CARGO_FLAGS) -- -O binary -j .mbr build/mbr.bin
 
 build/stage1.bin: $(BINARY_DIR)/eonix_kernel
-	cargo objcopy -q $(CARGO_FLAGS) -- -O binary -j .stage1 build/stage1.bin
+	CARGO_TARGET_DIR=build cargo objcopy -q $(CARGO_FLAGS) -- -O binary -j .stage1 build/stage1.bin
 
 build/kernel.bin: $(BINARY_DIR)/eonix_kernel
-	cargo objcopy -q $(CARGO_FLAGS) -- -O binary --strip-debug \
+	CARGO_TARGET_DIR=build cargo objcopy -q $(CARGO_FLAGS) -- -O binary --strip-debug \
 		-R .mbr -R .stage1 build/kernel.bin
 
 build/boot-x86_64.img: build/fs-x86_64.img build/mbr.bin build/stage1.bin build/kernel.bin
