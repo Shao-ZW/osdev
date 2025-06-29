@@ -1,6 +1,8 @@
 use super::SyscallNoReturn;
 use crate::io::Buffer;
-use crate::kernel::constants::{EINVAL, ENOENT, ENOTDIR, ERANGE, ESRCH};
+use crate::kernel::constants::{
+    CLOCK_MONOTONIC, CLOCK_REALTIME, CLOCK_REALTIME_COARSE, EINVAL, ENOENT, ENOTDIR, ERANGE, ESRCH,
+};
 use crate::kernel::constants::{
     ENOSYS, PR_GET_NAME, PR_SET_NAME, RLIMIT_STACK, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK,
 };
@@ -49,6 +51,37 @@ bitflags! {
 
 #[eonix_macros::define_syscall(SYS_NANOSLEEP)]
 fn nanosleep(req: *const (u32, u32), rem: *mut (u32, u32)) -> KResult<usize> {
+    let req = UserPointer::new(req)?.read()?;
+    let rem = if rem.is_null() {
+        None
+    } else {
+        Some(UserPointerMut::new(rem)?)
+    };
+
+    let duration = Duration::from_secs(req.0 as u64) + Duration::from_nanos(req.1 as u64);
+    Task::block_on(sleep(duration));
+
+    if let Some(rem) = rem {
+        rem.write((0, 0))?;
+    }
+
+    Ok(0)
+}
+
+#[eonix_macros::define_syscall(SYS_CLOCK_NANOSLEEP)]
+fn clock_nanosleep(
+    clock_id: u32,
+    flags: u32,
+    req: *const (u32, u32),
+    rem: *mut (u32, u32),
+) -> KResult<usize> {
+    if clock_id != CLOCK_REALTIME
+        && clock_id != CLOCK_REALTIME_COARSE
+        && clock_id != CLOCK_MONOTONIC
+    {
+        unimplemented!("Unsupported clock_id: {}", clock_id);
+    }
+
     let req = UserPointer::new(req)?.read()?;
     let rem = if rem.is_null() {
         None
@@ -404,6 +437,21 @@ fn getegid() -> KResult<u32> {
 #[eonix_macros::define_syscall(SYS_GETGID)]
 fn getgid() -> KResult<u32> {
     sys_getegid(thread)
+}
+
+#[eonix_macros::define_syscall(SYS_GETRANDOM)]
+fn getrandom() -> KResult<()> {
+    Ok(())
+}
+
+#[eonix_macros::define_syscall(SYS_SYNC)]
+fn sync() -> KResult<()> {
+    Ok(())
+}
+
+#[eonix_macros::define_syscall(SYS_FSYNC)]
+fn fsync() -> KResult<()> {
+    Ok(())
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -826,6 +874,11 @@ fn sigreturn() -> KResult<SyscallNoReturn> {
 #[eonix_macros::define_syscall(SYS_ARCH_PRCTL)]
 fn arch_prctl(option: u32, addr: u32) -> KResult<u32> {
     sys_arch_prctl(thread, option, addr)
+}
+
+#[eonix_macros::define_syscall(SYS_SCHED_YIELD)]
+fn sched_yield() -> KResult<()> {
+    Ok(())
 }
 
 pub fn keep_alive() {}

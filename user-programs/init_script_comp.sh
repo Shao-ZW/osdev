@@ -91,10 +91,13 @@ mount -t ext4 /dev/vda /mnt1
 cp -r /mnt1/glibc/lib .
 cp -r /mnt1/musl/basic .
 
-ln -s $BUSYBOX .
+ln -s $BUSYBOX /busybox
 ln -s $BUSYBOX /bin/busybox
 
 ln -s /mnt1/musl/busybox_cmd.txt .
+
+ln -s /mnt1/musl/iozone .
+ln -s /mnt1/musl/lib/libc.so /lib/ld-musl-riscv64-sf.so.1
 
 ln -s /mnt1/musl/lua .
 ln -s /mnt1/musl/test.sh .
@@ -103,10 +106,12 @@ for item in `ls /mnt1/musl/*.lua`; do
     ln -s $item .
 done
 
+ln -s /mnt1/musl/iozone_testcode.sh .
 ln -s /mnt1/musl/lua_testcode.sh .
 ln -s /mnt1/musl/busybox_testcode.sh .
 ln -s /mnt1/musl/basic_testcode.sh .
 
+sh iozone_testcode.sh
 sh busybox_testcode.sh
 sh basic_testcode.sh
 sh lua_testcode.sh

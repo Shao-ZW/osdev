@@ -2,7 +2,7 @@ use bitflags::bitflags;
 use eonix_mm::address::VAddr;
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy)]
     pub struct PageFaultErrorCode: u32 {
         const Read = 2;
         const Write = 4;

@@ -1,3 +1,4 @@
+use crate::kernel::mem::page_cache::PageCacheRawPage;
 use crate::kernel::mem::PhysAccess;
 use buddy_allocator::BuddyRawPage;
 use core::{
@@ -31,17 +32,30 @@ impl SlabPageInner {
     }
 }
 
+struct PageCacheInner {
+    valid_size: usize,
+}
+
 pub struct BuddyPageInner {}
 
 enum PageType {
     Buddy(BuddyPageInner),
     Slab(SlabPageInner),
+    PageCache(PageCacheInner),
 }
 
 impl PageType {
     fn slab_data(&mut self) -> &mut SlabPageInner {
         if let PageType::Slab(slab_data) = self {
             return slab_data;
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn page_cache_data(&mut self) -> &mut PageCacheInner {
+        if let PageType::PageCache(cache_data) = self {
+            return cache_data;
         } else {
             unreachable!()
         }
@@ -69,8 +83,8 @@ impl PageFlags {
     pub const PRESENT: u32 = 1 << 0;
     // pub const LOCKED: u32 = 1 << 1;
     pub const BUDDY: u32 = 1 << 2;
-    // pub const SLAB: u32 = 1 << 3;
-    // pub const DIRTY: u32 = 1 << 4;
+    pub const SLAB: u32 = 1 << 3;
+    pub const DIRTY: u32 = 1 << 4;
     pub const FREE: u32 = 1 << 5;
     pub const LOCAL: u32 = 1 << 6;
 
@@ -232,5 +246,27 @@ impl SlabRawPage for RawPagePtr {
 
     fn slab_init(&self, first_free: Option<NonNull<usize>>) {
         self.as_mut().shared_data = PageType::Slab(SlabPageInner::new(first_free));
+    }
+}
+
+impl PageCacheRawPage for RawPagePtr {
+    fn valid_size(&self) -> &mut usize {
+        &mut self.as_mut().shared_data.page_cache_data().valid_size
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.flags().has(PageFlags::DIRTY)
+    }
+
+    fn clear_dirty(&self) {
+        self.flags().clear(PageFlags::DIRTY);
+    }
+
+    fn set_dirty(&self) {
+        self.flags().set(PageFlags::DIRTY);
+    }
+
+    fn cache_init(&self) {
+        self.as_mut().shared_data = PageType::PageCache(PageCacheInner { valid_size: 0 });
     }
 }
