@@ -60,7 +60,9 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     println_fatal!();
     println_fatal!("{}", info.message());
 
-    loop {}
+    loop {
+        eonix_hal::arch_exported::bootstrap::shutdown();
+    }
 }
 
 static BSP_OK: AtomicBool = AtomicBool::new(false);
