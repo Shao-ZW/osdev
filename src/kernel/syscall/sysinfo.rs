@@ -90,13 +90,25 @@ fn do_clock_gettime64(_thread: &Thread, clock_id: u32, timespec: *mut TimeSpec) 
     }
 
     let timespec = UserPointerMut::new(timespec)?;
-    let now = Instant::now();
-    let since_epoch = now.since_epoch();
 
-    timespec.write(TimeSpec {
-        tv_sec: since_epoch.as_secs(),
-        tv_nsec: since_epoch.subsec_nanos(),
-    })
+    match clock_id {
+        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => {
+            let now = Instant::now();
+            let since_epoch = now.since_epoch();
+            timespec.write(TimeSpec {
+                tv_sec: since_epoch.as_secs(),
+                tv_nsec: since_epoch.subsec_nanos(),
+            })
+        }
+        CLOCK_MONOTONIC => {
+            let uptime_secs = Ticks::since_boot().as_secs();
+            timespec.write(TimeSpec {
+                tv_sec: uptime_secs,
+                tv_nsec: 0,
+            })
+        }
+        _ => unimplemented!(),
+    }
 }
 
 #[cfg(not(target_arch = "x86_64"))]

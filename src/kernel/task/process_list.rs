@@ -9,6 +9,7 @@ use alloc::{
     collections::btree_map::BTreeMap,
     sync::{Arc, Weak},
 };
+use eonix_log::println_warn;
 use eonix_runtime::task::Task;
 use eonix_sync::{AsProof as _, AsProofMut as _, RwLock};
 
@@ -117,7 +118,10 @@ impl ProcessList {
         let process = thread.process.clone();
 
         if process.pid == 1 {
-            panic!("init exited");
+            println_warn!("init exited");
+
+            // TODO: WTF
+            eonix_hal::arch_exported::bootstrap::shutdown();
         }
 
         let inner = process.inner.access_mut(self.prove_mut());
