@@ -4,6 +4,8 @@ build/
 
 test/
 
+target/
+
 bx_enh_dbg.ini
 
 .cache/

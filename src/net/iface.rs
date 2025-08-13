@@ -3,7 +3,6 @@ use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 use crate::kernel::constants::EADDRINUSE;
 use crate::kernel::timer::Instant;
 use crate::net::device::NetDevice;
-use crate::net::socket::tcp::TcpSocket;
 use crate::prelude::KResult;
 
 use alloc::sync::Arc;
@@ -11,6 +10,7 @@ use alloc::vec;
 use alloc::{collections::btree_set::BTreeSet, vec::Vec};
 use eonix_runtime::task::Task;
 use eonix_sync::Mutex;
+use smoltcp::phy::Medium;
 use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet},
     socket::tcp,
@@ -29,25 +29,29 @@ pub struct Iface {
     sockets: SocketSet<'static>,
 }
 
+unsafe impl Send for Iface {}
+
 const IP_LOCAL_PORT_START: u16 = 32768;
 const IP_LOCAL_PORT_END: u16 = 60999;
 
-unsafe impl Send for Iface {}
-
 impl Iface {
-    pub fn new(
-        device: NetDevice,
-        ether_addr: EthernetAddress,
-        ip_cidr: Ipv4Cidr,
-        gateway: Ipv4Addr,
-    ) -> Self {
+    pub fn new(device: NetDevice, ip_cidr: Ipv4Cidr, gateway: Option<Ipv4Addr>) -> Self {
         let iface_inner = {
-            let config = Config::new(wire::HardwareAddress::Ethernet(ether_addr));
-            let now = smoltcp::time::Instant::from_millis(Instant::now().to_millis() as i64);
             let mut device = device.lock();
+            let config = match device.caps().medium {
+                Medium::Ethernet => Config::new(wire::HardwareAddress::Ethernet(EthernetAddress(
+                    device.mac_addr(),
+                ))),
+                Medium::Ip => Config::new(wire::HardwareAddress::Ip),
+            };
+            let now = smoltcp::time::Instant::from_millis(Instant::now().to_millis() as i64);
             let mut iface = Interface::new(config, &mut *device, now);
             iface.update_ip_addrs(|ip_addrs| ip_addrs.push(wire::IpCidr::Ipv4(ip_cidr)).unwrap());
-            iface.routes_mut().add_default_ipv4_route(gateway).unwrap();
+
+            if let Some(gateway) = gateway {
+                iface.routes_mut().add_default_ipv4_route(gateway).unwrap();
+            }
+
             iface
         };
 
@@ -70,14 +74,14 @@ impl Iface {
         self.sockets.add(tcp::Socket::new(rx_buffer, tx_buffer))
     }
 
-    pub fn remove_tcp_socket(&mut self, socket: &TcpSocket) {
-        self.sockets
-            .remove(socket.handle().expect("Should have a socket handle"));
+    // pub fn remove_tcp_socket(&mut self, socket: &TcpSocket) {
+    //     self.sockets
+    //         .remove(socket.handle().expect("Should have a socket handle"));
 
-        if let Some(socket_addr) = socket.local_addr() {
-            self.used_ports.remove(&socket_addr.port());
-        }
-    }
+    //     if let Some(socket_addr) = socket.local_addr() {
+    //         self.used_ports.remove(&socket_addr.port());
+    //     }
+    // }
 
     pub fn bind_tcp_socket(&mut self, bind_port: u16) -> KResult<(SocketAddr, SocketHandle)> {
         if self.used_ports.contains(&bind_port) {
