@@ -1,12 +1,7 @@
 pub mod loopback;
 
-use crate::{kernel::constants::EFAULT, prelude::KResult};
-use alloc::{
-    boxed::Box,
-    collections::btree_map::{BTreeMap, Entry},
-    sync::Arc,
-    vec,
-};
+use crate::prelude::KResult;
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use eonix_sync::Spin;
 
 pub use smoltcp::phy::DeviceCapabilities;
@@ -14,21 +9,16 @@ pub use smoltcp::phy::DeviceCapabilities;
 pub type NetDevice = Arc<Spin<dyn NetDev>>;
 pub type Mac = [u8; 6];
 
-pub static NETDEVS: Spin<BTreeMap<&str, NetDevice>> = Spin::new(BTreeMap::new());
+pub static NETDEVS: Spin<Vec<NetDevice>> = Spin::new(Vec::new());
 
 pub fn register_netdev(netdev: impl NetDev + 'static) -> KResult<NetDevice> {
-    match NETDEVS.lock().entry(netdev.name()) {
-        Entry::Vacant(entry) => {
-            let netdev = Arc::new(Spin::new(netdev));
-            entry.insert(netdev.clone());
-            Ok(netdev)
-        }
-        Entry::Occupied(_) => Err(EFAULT),
-    }
-}
+    let netdev = Arc::new(Spin::new(netdev));
 
-pub fn get_netdev(name: &str) -> Option<NetDevice> {
-    NETDEVS.lock().get(name).map(|netdev| netdev.clone())
+    let mut netdevs = NETDEVS.lock();
+    netdevs.push(netdev.clone());
+    drop(netdevs);
+
+    Ok(netdev)
 }
 
 #[derive(Debug, Clone, Copy)]
