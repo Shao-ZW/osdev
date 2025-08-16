@@ -1,6 +1,6 @@
 use crate::{
     io::{Buffer, Stream},
-    kernel::constants::EINVAL,
+    kernel::{constants::EINVAL, vfs::file::PollEvent},
     net::iface::{NetIface, IFACES},
     prelude::KResult,
 };
@@ -54,6 +54,8 @@ pub trait Socket: Sync + Send {
     async fn recv(&self, buffer: &mut dyn Buffer) -> KResult<(usize, RecvMetadata)>;
 
     async fn send(&self, stream: &mut dyn Stream, send_meta: SendMetadata) -> KResult<usize>;
+
+    fn poll(&self, events: PollEvent) -> KResult<PollEvent>;
 }
 
 pub enum BoundSocket {

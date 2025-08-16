@@ -11,6 +11,7 @@ use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::btree_set::BTreeSet;
 use alloc::sync::Arc;
 use alloc::vec;
+use eonix_log::println_debug;
 use eonix_runtime::task::Task;
 use eonix_sync::Mutex;
 use smoltcp::phy::Medium;
@@ -45,7 +46,7 @@ const UDP_TX_BUF_LEN: usize = 65536;
 impl Iface {
     pub fn new(device: NetDevice, ip_cidr: Ipv4Cidr, gateway: Option<Ipv4Addr>) -> Self {
         let iface_inner = {
-            let mut device = device.lock();
+            let mut device = Task::block_on(device.lock());
             let config = match device.caps().medium {
                 Medium::Ethernet => Config::new(wire::HardwareAddress::Ethernet(EthernetAddress(
                     device.mac_addr(),
@@ -95,14 +96,9 @@ impl Iface {
         self.sockets.add(udp::Socket::new(rx_buffer, tx_buffer))
     }
 
-    // pub fn remove_tcp_socket(&mut self, socket: &TcpSocket) {
-    //     self.sockets
-    //         .remove(socket.handle().expect("Should have a socket handle"));
-
-    //     if let Some(socket_addr) = socket.local_addr() {
-    //         self.used_ports.remove(&socket_addr.port());
-    //     }
-    // }
+    pub fn remove_socket(&mut self, handle: SocketHandle) {
+        self.sockets.remove(handle);
+    }
 
     pub fn bind_socket(
         &mut self,
@@ -148,11 +144,75 @@ impl Iface {
     }
 
     pub fn poll(&mut self) {
-        let mut device = self.device.lock();
+        let mut device = Task::block_on(self.device.lock());
         let timestamp = smoltcp::time::Instant::from_millis(Instant::now().to_millis() as i64);
+
+        // for (_, socket) in self.sockets.iter() {
+        //     match socket {
+        //         Socket::Tcp(tcp) => {
+        //             if let Some(backlog) = &tcp.backlog {
+        //                 for (_, socket) in backlog.iter() {
+        //                     match socket {
+        //                         Socket::Tcp(tcp) => {
+        //                             println_debug!(
+        //                                 "son of above listen{:?} local{:?} remote{:?} {:?}",
+        //                                 tcp.listen_endpoint(),
+        //                                 tcp.local_endpoint(),
+        //                                 tcp.remote_endpoint(),
+        //                                 tcp.state()
+        //                             );
+        //                         }
+        //                         _ => {}
+        //                     }
+        //                 }
+        //             }
+        //             println_debug!(
+        //                 "listen{:?} local{:?} remote{:?} {:?}",
+        //                 tcp.listen_endpoint(),
+        //                 tcp.local_endpoint(),
+        //                 tcp.remote_endpoint(),
+        //                 tcp.state()
+        //             );
+        //         }
+        //         _ => {}
+        //     }
+        // }
 
         self.iface_inner
             .poll(timestamp, &mut *device, &mut self.sockets);
+
+        // println_debug!("???????????????????????????????");
+
+        // for (_, socket) in self.sockets.iter() {
+        //     match socket {
+        //         Socket::Tcp(tcp) => {
+        //             if let Some(backlog) = &tcp.backlog {
+        //                 for (_, socket) in backlog.iter() {
+        //                     match socket {
+        //                         Socket::Tcp(tcp) => {
+        //                             println_debug!(
+        //                                 "son of above listen{:?} local{:?} remote{:?} {:?}",
+        //                                 tcp.listen_endpoint(),
+        //                                 tcp.local_endpoint(),
+        //                                 tcp.remote_endpoint(),
+        //                                 tcp.state()
+        //                             );
+        //                         }
+        //                         _ => {}
+        //                     }
+        //                 }
+        //             }
+        //             println_debug!(
+        //                 "listen{:?} local{:?} remote{:?} {:?}",
+        //                 tcp.listen_endpoint(),
+        //                 tcp.local_endpoint(),
+        //                 tcp.remote_endpoint(),
+        //                 tcp.state()
+        //             );
+        //         }
+        //         _ => {}
+        //     }
+        // }
     }
 }
 

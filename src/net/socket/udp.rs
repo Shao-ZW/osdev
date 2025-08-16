@@ -14,6 +14,7 @@ use smoltcp::{iface::SocketHandle, wire::IpEndpoint};
 
 use crate::io::{Buffer, Stream};
 use crate::kernel::constants::{EADDRNOTAVAIL, EAGAIN, EINVAL};
+use crate::kernel::vfs::file::PollEvent;
 use crate::net::iface::{get_ephemeral_iface, get_relate_iface, NetIface};
 use crate::net::socket::{BoundSocket, RecvMetadata, SendMetadata, Socket, SocketType};
 use crate::prelude::KResult;
@@ -21,6 +22,7 @@ use crate::prelude::KResult;
 pub struct UdpSocket {
     bound_socket: RwLock<Option<BoundSocket>>,
     local_addr: RwLock<Option<SocketAddr>>,
+    remote_addr: RwLock<Option<SocketAddr>>,
     is_nonblock: bool,
 }
 
@@ -29,6 +31,7 @@ impl UdpSocket {
         Arc::new(Self {
             bound_socket: RwLock::new(None),
             local_addr: RwLock::new(None),
+            remote_addr: RwLock::new(None),
             is_nonblock,
         })
     }
@@ -114,7 +117,7 @@ impl UdpSocket {
         iface: NetIface,
         socket_handle: SocketHandle,
         stream: &mut dyn Stream,
-        send_meta: SendMetadata,
+        remote_addr: SocketAddr,
         waker: &Waker,
     ) -> KResult<Option<usize>> {
         let mut iface_guard = Task::block_on(iface.lock());
@@ -124,17 +127,13 @@ impl UdpSocket {
             .1
             .get_mut::<udp::Socket>(socket_handle);
 
-        match socket.send_with(
-            stream.total(),
-            IpEndpoint::from(send_meta.remote_addr.unwrap()),
-            |tx_buffer| {
-                stream
-                    .poll_data(tx_buffer)
-                    .unwrap()
-                    .map(|data| data.len())
-                    .unwrap_or(0)
-            },
-        ) {
+        match socket.send_with(stream.total(), IpEndpoint::from(remote_addr), |tx_buffer| {
+            stream
+                .poll_data(tx_buffer)
+                .unwrap()
+                .map(|data| data.len())
+                .unwrap_or(0)
+        }) {
             Ok(res) => Ok(Some(res)),
             Err(udp::SendError::BufferFull) => {
                 socket.register_send_waker(waker);
@@ -147,10 +146,9 @@ impl UdpSocket {
     fn try_send(
         &self,
         stream: &mut dyn Stream,
-        send_meta: SendMetadata,
+        remote_addr: SocketAddr,
         waker: &Waker,
     ) -> KResult<Option<usize>> {
-        let remote_addr = send_meta.remote_addr.unwrap();
         let bound_socket_guard = Task::block_on(self.bound_socket.read());
 
         match bound_socket_guard.as_ref().unwrap() {
@@ -162,10 +160,10 @@ impl UdpSocket {
                     .find(|item| Arc::ptr_eq(&item.iface, &iface))
                     .unwrap()
                     .handle();
-                Self::send_impl(iface, handle, stream, send_meta, waker)
+                Self::send_impl(iface, handle, stream, remote_addr, waker)
             }
             BoundSocket::BoundSingle(single) => {
-                Self::send_impl(single.iface(), single.handle(), stream, send_meta, waker)
+                Self::send_impl(single.iface(), single.handle(), stream, remote_addr, waker)
             }
         }
     }
@@ -178,8 +176,7 @@ impl Socket for UdpSocket {
     }
 
     fn remote_addr(&self) -> Option<SocketAddr> {
-        // FIXME: https://man7.org/linux/man-pages/man2/getpeername.2.html what we shoudl return for udp?
-        None
+        Task::block_on(self.remote_addr.read()).clone()
     }
 
     fn bind(&self, socket_addr: SocketAddr) -> KResult<()> {
@@ -221,6 +218,11 @@ impl Socket for UdpSocket {
         Ok(())
     }
 
+    async fn connect(&self, remote_addr: SocketAddr) -> KResult<()> {
+        *Task::block_on(self.remote_addr.write()) = Some(remote_addr);
+        Ok(())
+    }
+
     async fn recv(&self, buffer: &mut dyn Buffer) -> KResult<(usize, RecvMetadata)> {
         struct RecvFuture<'a> {
             socket: &'a UdpSocket,
@@ -249,7 +251,12 @@ impl Socket for UdpSocket {
     }
 
     async fn send(&self, stream: &mut dyn Stream, send_meta: SendMetadata) -> KResult<usize> {
-        let remote_addr = send_meta.remote_addr.unwrap();
+        let remote_addr = if let Some(remote_addr) = send_meta.remote_addr {
+            remote_addr
+        } else {
+            Task::block_on(self.remote_addr.read()).clone().unwrap()
+        };
+
         let mut bound_socket_guard = Task::block_on(self.bound_socket.write());
         if bound_socket_guard.is_none() {
             let bind_iface = get_ephemeral_iface(Some(remote_addr.ip())).unwrap();
@@ -265,7 +272,7 @@ impl Socket for UdpSocket {
 
         struct SendFuture<'a> {
             socket: &'a UdpSocket,
-            send_meta: SendMetadata,
+            remote_addr: SocketAddr,
             stream: &'a mut dyn Stream,
         }
 
@@ -276,7 +283,7 @@ impl Socket for UdpSocket {
                 let this = self.get_mut();
                 match this
                     .socket
-                    .try_send(this.stream, this.send_meta, cx.waker())
+                    .try_send(this.stream, this.remote_addr, cx.waker())
                 {
                     Ok(Some(res)) => Poll::Ready(Ok(res)),
                     Ok(None) if this.socket.is_nonblock => Poll::Ready(Err(EAGAIN)),
@@ -288,26 +295,47 @@ impl Socket for UdpSocket {
 
         SendFuture {
             socket: self,
-            send_meta,
+            remote_addr,
             stream,
         }
         .await
+    }
+
+    fn poll(&self, events: PollEvent) -> KResult<PollEvent> {
+        todo!()
     }
 }
 
 impl Drop for UdpSocket {
     fn drop(&mut self) {
-        let (iface, handle) = self.iface_and_handle().unwrap();
+        let bound_socket_guard = Task::block_on(self.bound_socket.read());
 
-        let mut iface_guard = Task::block_on(iface.lock());
+        if bound_socket_guard.is_none() {
+            return;
+        }
 
-        let socket = iface_guard
-            .iface_and_sockets()
-            .1
-            .get_mut::<udp::Socket>(handle);
+        match bound_socket_guard.as_ref().unwrap() {
+            BoundSocket::BoundAll(all) => {
+                for item in &all.sockets {
+                    close_impl(item.iface(), item.handle());
+                }
+            }
+            BoundSocket::BoundSingle(single) => close_impl(single.iface(), single.handle()),
+        }
 
-        socket.close();
+        fn close_impl(iface: NetIface, handle: SocketHandle) {
+            let mut iface_guard = Task::block_on(iface.lock());
 
-        drop(iface_guard);
+            let socket = iface_guard
+                .iface_and_sockets()
+                .1
+                .get_mut::<udp::Socket>(handle);
+
+            socket.close();
+
+            iface_guard.poll();
+
+            iface_guard.remove_socket(handle);
+        }
     }
 }
