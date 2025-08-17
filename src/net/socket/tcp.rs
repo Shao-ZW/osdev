@@ -6,7 +6,6 @@ use core::task::{Poll, Waker};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use async_trait::async_trait;
-use eonix_log::println_debug;
 use eonix_runtime::task::Task;
 use eonix_sync::RwLock;
 use smoltcp::socket::tcp;
@@ -477,16 +476,18 @@ impl Drop for TcpSocket {
             return;
         }
 
+        let port = self.local_addr().unwrap().port();
+
         match bound_socket_guard.as_ref().unwrap() {
             BoundSocket::BoundAll(all) => {
                 for item in &all.sockets {
-                    close_impl(item.iface(), item.handle());
+                    close_impl(item.iface(), item.handle(), port);
                 }
             }
-            BoundSocket::BoundSingle(single) => close_impl(single.iface(), single.handle()),
+            BoundSocket::BoundSingle(single) => close_impl(single.iface(), single.handle(), port),
         }
 
-        fn close_impl(iface: NetIface, handle: SocketHandle) {
+        fn close_impl(iface: NetIface, handle: SocketHandle, port: u16) {
             let mut iface_guard = Task::block_on(iface.lock());
 
             let socket = iface_guard
@@ -498,7 +499,7 @@ impl Drop for TcpSocket {
 
             iface_guard.poll();
 
-            iface_guard.remove_socket(handle);
+            iface_guard.remove_socket(handle, port, SocketType::Tcp);
         }
     }
 }

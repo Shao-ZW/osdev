@@ -4,10 +4,11 @@ use core::pin::Pin;
 use core::task::{Poll, Waker};
 
 use alloc::boxed::Box;
+use alloc::collections::btree_map::BTreeMap;
 use alloc::sync::Arc;
 use async_trait::async_trait;
 use eonix_runtime::task::Task;
-use eonix_sync::RwLock;
+use eonix_sync::{RwLock, Spin};
 use smoltcp::socket::udp;
 use smoltcp::wire::IpListenEndpoint;
 use smoltcp::{iface::SocketHandle, wire::IpEndpoint};
@@ -19,11 +20,16 @@ use crate::net::iface::{get_ephemeral_iface, get_relate_iface, NetIface};
 use crate::net::socket::{BoundSocket, RecvMetadata, SendMetadata, Socket, SocketType};
 use crate::prelude::KResult;
 
+// FIXME:
+pub static UDP_PORT_MAP: Spin<BTreeMap<SocketAddr, BoundSocket>> = Spin::new(BTreeMap::new());
+
 pub struct UdpSocket {
     bound_socket: RwLock<Option<BoundSocket>>,
     local_addr: RwLock<Option<SocketAddr>>,
     remote_addr: RwLock<Option<SocketAddr>>,
     is_nonblock: bool,
+    // FIXME: can ensure the order
+    is_reuse_other: Spin<bool>,
 }
 
 impl UdpSocket {
@@ -33,6 +39,7 @@ impl UdpSocket {
             local_addr: RwLock::new(None),
             remote_addr: RwLock::new(None),
             is_nonblock,
+            is_reuse_other: Spin::new(false),
         })
     }
 
@@ -167,6 +174,31 @@ impl UdpSocket {
             }
         }
     }
+
+    fn poll_impl(
+        iface: NetIface,
+        socket_handle: SocketHandle,
+        events: PollEvent,
+    ) -> KResult<PollEvent> {
+        let mut iface_guard = Task::block_on(iface.lock());
+        let socket = iface_guard
+            .iface_and_sockets()
+            .1
+            .get_mut::<udp::Socket>(socket_handle);
+
+        let mut poll_state = PollEvent::empty();
+        if events.contains(PollEvent::Readable) {
+            if socket.can_recv() {
+                poll_state |= PollEvent::Readable;
+            }
+        }
+        if events.contains(PollEvent::Writable) {
+            if socket.can_send() {
+                poll_state |= PollEvent::Writable;
+            }
+        }
+        Ok(poll_state)
+    }
 }
 
 #[async_trait]
@@ -186,20 +218,27 @@ impl Socket for UdpSocket {
             return Err(EINVAL);
         }
 
-        if socket_addr.ip().is_unspecified() {
-            *bound_socket_guard = Some(BoundSocket::new_bind_all(
-                socket_addr.port(),
-                SocketType::Udp,
-            )?);
-            *Task::block_on(self.local_addr.write()) = Some(socket_addr);
+        *Task::block_on(self.local_addr.write()) = Some(socket_addr);
+
+        if let Some(bound_sock) = UDP_PORT_MAP.lock().get(&socket_addr) {
+            *bound_socket_guard = Some(bound_sock.clone());
+            *self.is_reuse_other.lock() = true;
+            return Ok(());
+        }
+
+        let (bound_socket, local_addr) = if socket_addr.ip().is_unspecified() {
+            (
+                BoundSocket::new_bind_all(socket_addr.port(), SocketType::Udp)?,
+                socket_addr,
+            )
         } else {
             let bind_iface = get_relate_iface(socket_addr.ip()).ok_or(EADDRNOTAVAIL)?;
-            let (bound_socket, local_addr) =
-                BoundSocket::new_bind_single(bind_iface, socket_addr.port(), SocketType::Udp)?;
+            BoundSocket::new_bind_single(bind_iface, socket_addr.port(), SocketType::Udp)?
+        };
 
-            *bound_socket_guard = Some(bound_socket);
-            *Task::block_on(self.local_addr.write()) = Some(local_addr);
-        }
+        *Task::block_on(self.local_addr.write()) = Some(local_addr);
+        UDP_PORT_MAP.lock().insert(local_addr, bound_socket.clone());
+        *bound_socket_guard = Some(bound_socket);
         drop(bound_socket_guard);
 
         let bound_socket_guard = Task::block_on(self.bound_socket.read());
@@ -219,7 +258,8 @@ impl Socket for UdpSocket {
     }
 
     async fn connect(&self, remote_addr: SocketAddr) -> KResult<()> {
-        *Task::block_on(self.remote_addr.write()) = Some(remote_addr);
+        *(self.remote_addr.write().await) = Some(remote_addr);
+
         Ok(())
     }
 
@@ -302,7 +342,21 @@ impl Socket for UdpSocket {
     }
 
     fn poll(&self, events: PollEvent) -> KResult<PollEvent> {
-        todo!()
+        let bound_socket_guard = Task::block_on(self.bound_socket.read());
+
+        match bound_socket_guard.as_ref().unwrap() {
+            BoundSocket::BoundSingle(single) => {
+                Self::poll_impl(single.iface(), single.handle(), events)
+            }
+            BoundSocket::BoundAll(all) => {
+                let mut poll_state = PollEvent::empty();
+                for bound_socket in &all.sockets {
+                    poll_state |=
+                        Self::poll_impl(bound_socket.iface(), bound_socket.handle(), events)?
+                }
+                Ok(poll_state)
+            }
+        }
     }
 }
 
@@ -314,16 +368,24 @@ impl Drop for UdpSocket {
             return;
         }
 
+        if *self.is_reuse_other.lock() {
+            return;
+        }
+
+        let local_addr = self.local_addr().unwrap();
+        let port = local_addr.port();
+
+        UDP_PORT_MAP.lock().remove(&local_addr);
         match bound_socket_guard.as_ref().unwrap() {
             BoundSocket::BoundAll(all) => {
                 for item in &all.sockets {
-                    close_impl(item.iface(), item.handle());
+                    close_impl(item.iface(), item.handle(), port);
                 }
             }
-            BoundSocket::BoundSingle(single) => close_impl(single.iface(), single.handle()),
+            BoundSocket::BoundSingle(single) => close_impl(single.iface(), single.handle(), port),
         }
 
-        fn close_impl(iface: NetIface, handle: SocketHandle) {
+        fn close_impl(iface: NetIface, handle: SocketHandle, port: u16) {
             let mut iface_guard = Task::block_on(iface.lock());
 
             let socket = iface_guard
@@ -335,7 +397,7 @@ impl Drop for UdpSocket {
 
             iface_guard.poll();
 
-            iface_guard.remove_socket(handle);
+            iface_guard.remove_socket(handle, port, SocketType::Udp);
         }
     }
 }

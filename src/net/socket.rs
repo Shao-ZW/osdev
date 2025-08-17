@@ -1,6 +1,9 @@
 use crate::{
     io::{Buffer, Stream},
-    kernel::{constants::EINVAL, vfs::file::PollEvent},
+    kernel::{
+        constants::{EADDRINUSE, EINVAL},
+        vfs::file::PollEvent,
+    },
     net::iface::{NetIface, IFACES},
     prelude::KResult,
 };
@@ -13,7 +16,7 @@ use smoltcp::iface::SocketHandle;
 pub mod tcp;
 pub mod udp;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum SocketType {
     Tcp,
     Udp,
@@ -58,6 +61,7 @@ pub trait Socket: Sync + Send {
     fn poll(&self, events: PollEvent) -> KResult<PollEvent>;
 }
 
+#[derive(Clone)]
 pub enum BoundSocket {
     BoundSingle(BoundSingle),
     BoundAll(BoundAll),
@@ -103,6 +107,7 @@ impl BoundSocket {
 }
 
 /// BoundAll is only used for socket listen all ifaces
+#[derive(Clone)]
 struct BoundAll {
     port: u16,
     // FIXME: need support IFACES dyn change
@@ -115,7 +120,14 @@ impl BoundAll {
 
         let mut sockets = Vec::new();
         for iface in ifaces_guard.values() {
-            sockets.push(BoundSingle::new_bind(iface.clone(), bind_port, socket_type)?.0);
+            // FIXME: handle err except eaddrinuse
+            if let Ok((item, _)) = BoundSingle::new_bind(iface.clone(), bind_port, socket_type) {
+                sockets.push(item);
+            }
+        }
+
+        if sockets.len() == 0 {
+            return Err(EADDRINUSE);
         }
 
         Ok(Self {
@@ -125,6 +137,7 @@ impl BoundAll {
     }
 }
 
+#[derive(Clone)]
 struct BoundSingle {
     iface: NetIface,
     socket_handle: SocketHandle,

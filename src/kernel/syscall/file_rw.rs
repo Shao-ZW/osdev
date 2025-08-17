@@ -79,21 +79,7 @@ fn dentry_from(
 fn read(fd: FD, buffer_: *mut u8, bufsize: usize) -> KResult<usize> {
     let mut buffer = UserBuffer::new(buffer_, bufsize)?;
 
-    if thread.files.get(fd).ok_or(EBADF)?.get_socket()?.is_some() {
-        println_debug!("{} {:?} socket read start {:?}", thread.tid, fd, bufsize);
-    }
-
-    let res = Task::block_on(thread.files.get(fd).ok_or(EBADF)?.read(&mut buffer, None));
-
-    // if thread.files.get(fd).ok_or(EBADF)?.get_socket()?.is_some() {
-    //     // let slice = unsafe { slice::from_raw_parts(buffer_, res.unwrap()) };
-    //     // let string = String::from_utf8_lossy(slice);
-    //     // println_debug!("{} read socket {:?}", thread.tid, string);
-
-    //     println_debug!("{} read socket res {:?}", thread.tid, res);
-    // }
-
-    res
+    Task::block_on(thread.files.get(fd).ok_or(EBADF)?.read(&mut buffer, None))
 }
 
 #[eonix_macros::define_syscall(SYS_PREAD64)]
@@ -114,17 +100,7 @@ fn write(fd: FD, buffer: *const u8, count: usize) -> KResult<usize> {
     let buffer = CheckedUserPointer::new(buffer, count)?;
     let mut stream = buffer.into_stream();
 
-    if thread.files.get(fd).ok_or(EBADF)?.get_socket()?.is_some() {
-        println_debug!("{} {:?} socket write start {:?}", thread.tid, fd, count);
-    }
-
-    let res = Task::block_on(thread.files.get(fd).ok_or(EBADF)?.write(&mut stream, None));
-
-    if thread.files.get(fd).ok_or(EBADF)?.get_socket()?.is_some() {
-        println_debug!("{} wirte socket {:?}", thread.tid, res);
-    }
-
-    res
+    Task::block_on(thread.files.get(fd).ok_or(EBADF)?.write(&mut stream, None))
 }
 
 #[eonix_macros::define_syscall(SYS_PWRITE64)]
@@ -558,27 +534,6 @@ fn ppoll(
     do_poll(thread, fds, nfds, 0)
 }
 
-// bitflags! {
-//     pub struct IoEvents: u32 {
-//         const IN  = 0x0001;
-//         const PRI = 0x0002;
-//         const OUT = 0x0004;
-//     }
-// }
-
-// impl IoEvents {
-//     fn new(readalbe: bool, writeable: bool) -> Self {
-//         let mut events = IoEvents::empty();
-//         if readalbe {
-//             events |= IoEvents::IN;
-//         }
-//         if writeable {
-//             events |= IoEvents::OUT;
-//         }
-//         events
-//     }
-// }
-
 #[eonix_macros::define_syscall(SYS_PSELECT6)]
 fn pselect6(
     nfds: u32,
@@ -607,16 +562,7 @@ fn pselect6(
         return Ok(0);
     }
 
-    // println_debug!(
-    //     "{} pselect6 nfds {} readfds {:?} writefds {:?} timeout {:?}",
-    //     thread.tid,
-    //     nfds,
-    //     readfds,
-    //     writefds,
-    //     timeout
-    // );
-
-    let _timeout = if timeout.is_null() {
+    let _time_out = if timeout.is_null() {
         None
     } else {
         let timeout = UserPointer::new(timeout)?.read()?;
@@ -624,7 +570,6 @@ fn pselect6(
             return Ok(0);
         }
 
-        println_debug!("pselect time {:?}", timeout);
         Some(timeout)
     };
 
@@ -670,16 +615,11 @@ fn pselect6(
         fds.clear();
     }
 
-    println_debug!("{} {:?}", thread.tid, poll_fds);
-
-    // let mut sleep_cnt = 10;
     let mut tot = 0;
 
     loop {
         for (fd, events) in &poll_fds {
-            // println_debug!("{:?}", fd);
             let res = Task::block_on(thread.files.get(FD::from(*fd)).ok_or(EBADF)?.poll(*events))?;
-            // println_debug!("poll res{:?}", res);
 
             if res.contains(PollEvent::Readable) {
                 if let Some(fds) = &mut read_fds {
@@ -699,13 +639,8 @@ fn pselect6(
             break;
         }
 
-        // if sleep_cnt >= 25 {
-        //     return Ok(0);
-        // }
-
         // Since we already have a background iface poll task, simply sleep for a while
-        Task::block_on(sleep(Duration::from_millis(200)));
-        // sleep_cnt += 1;
+        Task::block_on(sleep(Duration::from_millis(100)));
     }
 
     if let Some(fds) = read_fds {
@@ -714,8 +649,6 @@ fn pselect6(
     if let Some(fds) = write_fds {
         UserPointerMut::new(writefds)?.write(fds)?;
     }
-
-    println_debug!("{} pselect end {}", thread.tid, tot);
 
     Ok(tot)
 }

@@ -26,7 +26,6 @@ use posix_types::syscall_no::*;
 
 fn read_socket_addr(addr_ptr: *const CSockAddr, addrlen: usize) -> KResult<SocketAddr> {
     if addrlen > ADDR_MAX_LEN || addrlen < 2 {
-        // println_debug!("here");
         return Err(EINVAL);
     }
 
@@ -66,13 +65,6 @@ fn write_socket_addr(
 
 #[eonix_macros::define_syscall(SYS_SOCKET)]
 fn socket(domain: u32, type_: u32, protocol: u32) -> KResult<FD> {
-    println_debug!(
-        "{} socket {:?} {:?} {:?}",
-        thread.tid,
-        domain,
-        type_,
-        protocol
-    );
     let domain = SockDomain::try_from(domain).map_err(|_| EINVAL)?;
     let sock_type = SockType::try_from(type_ & SOCK_TYPE_MASK).map_err(|_| EINVAL)?;
     let sock_flags = SockFlags::from_bits_truncate(type_ & !SOCK_TYPE_MASK);
@@ -97,30 +89,11 @@ fn socket(domain: u32, type_: u32, protocol: u32) -> KResult<FD> {
 
 #[eonix_macros::define_syscall(SYS_SETSOCKOPT)]
 fn set_sockopt(fd: FD, level: u32, optname: u32, optval: *const u8, optlen: u32) -> KResult<()> {
-    println_debug!(
-        "{} setsockopt {:?} {:?} {:?} {:?} {:?}",
-        thread.tid,
-        fd,
-        level,
-        optname,
-        optval,
-        optlen
-    );
     Ok(())
 }
 
 #[eonix_macros::define_syscall(SYS_GETSOCKOPT)]
 fn get_sockopt(fd: FD, level: u32, optname: u32, optval: *mut u8, optlen: *mut u32) -> KResult<()> {
-    println_debug!(
-        "{} getsockopt {:?} {:?} {:?} {:?} {:?}",
-        thread.tid,
-        fd,
-        level,
-        optname,
-        optval,
-        optlen
-    );
-
     const SOL_SOCKET: u32 = 1;
     const SQL_TCP: u32 = 6;
 
@@ -148,7 +121,6 @@ fn get_sockopt(fd: FD, level: u32, optname: u32, optval: *mut u8, optlen: *mut u
 
 #[eonix_macros::define_syscall(SYS_GETSOCKNAME)]
 fn get_socktname(sockfd: FD, sockaddr_ptr: *mut CSockAddr, addrlen_ptr: *mut u32) -> KResult<()> {
-    println_debug!("getsockname {:?}", sockfd);
     let socket = thread
         .files
         .get(sockfd)
@@ -161,13 +133,11 @@ fn get_socktname(sockfd: FD, sockaddr_ptr: *mut CSockAddr, addrlen_ptr: *mut u32
         write_socket_addr(sockaddr_ptr, addrlen_ptr, local_addr)?;
     }
 
-    println_debug!("getsockname end {:?}", local_addr);
     Ok(())
 }
 
 #[eonix_macros::define_syscall(SYS_GETPEERNAME)]
 fn get_peername(sockfd: FD, sockaddr_ptr: *mut CSockAddr, addrlen_ptr: *mut u32) -> KResult<()> {
-    println_debug!("getpeername {:?}", sockfd);
     let socket = thread
         .files
         .get(sockfd)
@@ -179,19 +149,11 @@ fn get_peername(sockfd: FD, sockaddr_ptr: *mut CSockAddr, addrlen_ptr: *mut u32)
     if sockaddr_ptr as usize != 0 {
         write_socket_addr(sockaddr_ptr, addrlen_ptr, remote_addr)?;
     }
-    println_debug!("getpeername end {:?}", remote_addr);
     Ok(())
 }
 
 #[eonix_macros::define_syscall(SYS_BIND)]
 fn bind(sockfd: FD, sockaddr_ptr: *const CSockAddr, addrlen: u32) -> KResult<()> {
-    println_debug!(
-        "{} bind {:?} {:?} {:?}",
-        thread.tid,
-        sockfd,
-        sockaddr_ptr,
-        addrlen
-    );
     let socket = thread
         .files
         .get(sockfd)
@@ -202,13 +164,11 @@ fn bind(sockfd: FD, sockaddr_ptr: *const CSockAddr, addrlen: u32) -> KResult<()>
     let socket_addr = read_socket_addr(sockaddr_ptr, addrlen as usize)?;
 
     let res = socket.bind(socket_addr);
-    println_debug!("bind end {:?}", res);
     res
 }
 
 #[eonix_macros::define_syscall(SYS_LISTEN)]
 fn listen(sockfd: FD, backlog: u32) -> KResult<()> {
-    println_debug!("{} listen {:?} {:?} ", thread.tid, sockfd, backlog);
     let socket = thread
         .files
         .get(sockfd)
@@ -217,19 +177,11 @@ fn listen(sockfd: FD, backlog: u32) -> KResult<()> {
         .ok_or(ENOTSOCK)?;
 
     let res = socket.listen(backlog as usize);
-    println_debug!("listen end {:?}", res);
     res
 }
 
 #[eonix_macros::define_syscall(SYS_ACCEPT)]
 fn accept(sockfd: FD, sockaddr_ptr: *mut CSockAddr, addrlen_ptr: *mut u32) -> KResult<FD> {
-    println_debug!(
-        "{} accept {:?} {:?} {:?}",
-        thread.tid,
-        sockfd,
-        sockaddr_ptr,
-        addrlen_ptr
-    );
     let socket = thread
         .files
         .get(sockfd)
@@ -244,19 +196,11 @@ fn accept(sockfd: FD, sockaddr_ptr: *mut CSockAddr, addrlen_ptr: *mut u32) -> KR
         accepted_socket.remote_addr().unwrap(),
     )?;
     let res = thread.files.socket(accepted_socket);
-    println_debug!("accept end {:?}", res);
     res
 }
 
 #[eonix_macros::define_syscall(SYS_CONNECT)]
 fn connect(sockfd: FD, sockaddr_ptr: *const CSockAddr, addrlen: u32) -> KResult<()> {
-    println_debug!(
-        "{} connect {:?} {:?} {:?}",
-        thread.tid,
-        sockfd,
-        sockaddr_ptr,
-        addrlen
-    );
     let socket = thread
         .files
         .get(sockfd)
@@ -267,13 +211,11 @@ fn connect(sockfd: FD, sockaddr_ptr: *const CSockAddr, addrlen: u32) -> KResult<
     let remote_addr = read_socket_addr(sockaddr_ptr, addrlen as usize)?;
 
     let res = Task::block_on(socket.connect(remote_addr));
-    println_debug!("connect end {:?}", res);
     res
 }
 
 #[eonix_macros::define_syscall(SYS_RECVMSG)]
 fn recvmsg(sockfd: FD, msghdr_ptr: *mut MsgHdr, flags: u32) -> KResult<usize> {
-    println_debug!("recvmsg {:?} {:?} {:?}", sockfd, msghdr_ptr, flags);
     let socket = thread
         .files
         .get(sockfd)
@@ -337,7 +279,6 @@ fn recvfrom(
     srcaddr_ptr: *mut CSockAddr,
     addrlen_ptr: *mut u32,
 ) -> KResult<usize> {
-    println!("recvfrom {:?}", sockfd);
     let socket = thread
         .files
         .get(sockfd)
@@ -356,7 +297,6 @@ fn recvfrom(
 
 #[eonix_macros::define_syscall(SYS_SENDMSG)]
 fn sendmsg(sockfd: FD, msghdr: *const MsgHdr, flags: u32) -> KResult<usize> {
-    println_debug!("sendmsg {:?}", sockfd);
     let socket = thread
         .files
         .get(sockfd)
@@ -416,7 +356,6 @@ fn sendto(
     dstaddr_ptr: *const CSockAddr,
     addrlen: u32,
 ) -> KResult<usize> {
-    println_debug!("sendto {:?}", sockfd);
     let socket = thread
         .files
         .get(sockfd)
